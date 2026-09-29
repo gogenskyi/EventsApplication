@@ -1,57 +1,98 @@
 # EventsApplication — Події поруч
 
-Кросплатформовий UGC-сервіс для публікації подій навколо користувача: фото/відео, категорія, геолокація, карта, пошук, фільтри та взаємодія «Я йду / Відмовитись / Маршрут».
+Кросплатформовий UGC-сервіс: користувачі публікують фото/відео подій, автоматично додають геолокацію, а інші бачать активність навколо себе на інтерактивній карті.
 
-## Що вже реалізовано
+## Реалізовано в MVP
 
-- адаптивний mobile-first UI за макетом;
-- інтерактивна карта та визначення геолокації через HTML5 Geolocation API;
-- створення події з фото/відео з галереї або камери;
-- автоматичні координати або ручне встановлення точки на карті;
-- PostgreSQL: користувачі, події, відвідування та скарги;
-- реєстрація/email + пароль і cookie-based JWT session;
-- Google Sign-In endpoint через Google Identity Services;
-- профіль та зміна імені;
-- пошук і фільтрація за категоріями;
-- real-time оновлення подій та лічильника «йдуть» через Socket.IO;
+- mobile-first адаптивний UI за макетом;
+- PWA: встановлення на телефон, service worker і offline app shell;
+- Leaflet + OpenStreetMap інтерактивна карта;
+- HTML5 Geolocation API + ручний вибір точки на карті;
+- створення допису з камери або галереї;
+- фото/відео upload з MIME та розміром файла, що контролюються сервером;
+- PostgreSQL єдине джерело даних;
+- реєстрація та вхід email/password;
+- Google Sign-In з серверною перевіркою ID token;
+- JWT session в HttpOnly cookie, без зберігання токена в localStorage;
+- профіль, зміна імені та upload аватарки;
+- пошук, категорії та пошук у радіусі навколо координат;
+- «Я йду», «Відмовитись», «Прокласти маршрут»;
+- Socket.IO для realtime подій та лічильника учасників;
 - скарги на фейк/спам;
-- прокладання маршруту через Google Maps;
-- підготовлена конфігурація для Mapbox/Google та push-сповіщень.
+- trust status: new / verified / reported / hidden;
+- moderator/admin API та `admin.html` для розгляду скарг;
+- web push: підписка браузера, збереження координат підписки та сповіщення про нові події в радіусі 30 км;
+- центр сповіщень у застосунку;
+- єдиний API, який можна використовувати і вебклієнтом, і майбутнім нативним mobile client.
 
 ## Архітектура
 
-`Browser / Mobile Web → Express API → PostgreSQL`
+`Web/PWA → Express API → PostgreSQL`
 
-`                         ↘ Socket.IO → realtime clients`
+`                    ↘ Socket.IO → realtime clients`
 
-Медіа для MVP зберігаються в `uploads/`. Для production їх варто перенести в S3-compatible storage (S3/R2/GCS) і додати CDN.
+`                    ↘ Web Push → nearby subscribers`
 
-## Запуск
+Для MVP медіа зберігаються в `uploads/`. Для production рекомендовано S3-compatible storage (AWS S3 / Cloudflare R2 / GCS) + CDN.
 
-1. Встановити Node.js 20+ та PostgreSQL 15+.
+## Запуск локально
+
+1. Node.js 20+ та PostgreSQL 15+.
 2. Створити БД `events`.
 3. Виконати `schema.sql`.
-4. Скопіювати `.env.example` у `.env` та задати `DATABASE_URL` і довгий `JWT_SECRET`.
-5. Виконати `npm install`.
-6. Запустити `npm run dev`.
-7. Відкрити `http://localhost:3000`.
+4. Скопіювати `.env.example` у `.env`.
+5. Задати мінімум `DATABASE_URL` і довгий випадковий `JWT_SECRET`.
+6. Для Google входу додати `GOOGLE_CLIENT_ID`.
+7. Для web push згенерувати VAPID keys і додати `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`.
+8. `npm install`.
+9. `npm run dev`.
+10. Відкрити `http://localhost:3000`.
 
-### Google Login
+## Google Login
 
-Створіть OAuth Web Client у Google Cloud Console, додайте `http://localhost:3000` до дозволених JavaScript origins та вставте Client ID у `GOOGLE_CLIENT_ID` у `.env` і `config.js`.
+Створіть OAuth Web Client у Google Cloud Console, додайте origin вашого сайту в дозволені JavaScript origins та вкажіть client ID у `.env`.
 
-### Карта
+## Push
 
-Поточний MVP використовує Leaflet + OpenStreetMap, щоб карта працювала без ключа. Для production Mapbox можна підключити через `config.js` (`MAPBOX_TOKEN`) та замінити tile provider.
+Web Push працює тільки в secure context (HTTPS; localhost є винятком для локальної розробки). Після запуску користувач входить в акаунт, відкриває сповіщення та натискає «Увімкнути push-сповіщення».
+
+Подія створює in-app notification для підписаних користувачів у радіусі 30 км і, якщо VAPID налаштований, відправляє browser push.
 
 ## Безпека
 
-- пароль зберігається тільки як bcrypt hash;
-- JWT лежить у `HttpOnly` cookie, а не в localStorage;
-- SQL запити параметризовані;
-- медіа має обмеження 100 MB та whitelist MIME types;
-- Google ID token перевіряється сервером перед створенням сесії.
+- bcrypt hash для паролів;
+- JWT тільки в HttpOnly cookie;
+- SameSite cookie та Secure у production;
+- параметризовані SQL-запити;
+- серверна перевірка Google ID token;
+- MIME/size whitelist для media та avatar uploads;
+- moderator/admin endpoints захищені роллю;
+- користувач не може сам виставити собі verified через public API.
 
-## Наступний production-рівень
+## Структура
 
-S3/R2 + CDN для медіа, Redis для масштабування Socket.IO, повноцінні web-push/VAPID, rate limiting, модерація/anti-spam, адміністративна панель, verified-user flow, PWA install/offline cache та окремий Capacitor/React Native mobile client.
+```text
+index.html          web/PWA interface
+style.css           responsive UI
+script.js            map, feed, auth, events
+notifications.js     PWA + push client
+server.js            Express API + Socket.IO + Web Push
+schema.sql           PostgreSQL schema
+admin.html           moderation dashboard
+manifest.webmanifest PWA metadata
+sw.js                service worker
+favicon.svg          app icon
+config.js            public client configuration
+.env.example         server configuration template
+```
+
+## Production roadmap
+
+- S3/R2 + CDN для медіа;
+- Redis adapter для Socket.IO при горизонтальному масштабуванні;
+- rate limiting, CSRF strategy для cookie-auth, audit logs;
+- image/video transcoding and thumbnails;
+- повноцінна модерація та anti-spam/abuse detection;
+- verified-user workflow;
+- native Android/iOS client на тому самому API (Capacitor/React Native);
+- Mapbox/Google Maps provider для production залежно від вимог до картографії.
