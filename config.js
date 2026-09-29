@@ -1,6 +1,7 @@
 window.APP_CONFIG = {
-  // Optional: create a public Mapbox token at https://account.mapbox.com/ and paste it here.
+  // Keep empty when the web app and API share the same origin.
+  // For Netlify + a separate Node API, set this to the public API origin.
+  API_BASE_URL: '',
   MAPBOX_TOKEN: '',
-  // Optional: Google Identity Services client ID for the Google sign-in button.
   GOOGLE_CLIENT_ID: ''
 };
