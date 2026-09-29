@@ -14,8 +14,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - run: npm install
       - run: node --check server.js
       - run: node --check script.js
       - run: node --check notifications.js
       - run: node --check profile-enhancements.js
+      - run: node --check netlify/functions/api.js
