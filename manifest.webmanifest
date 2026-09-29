@@ -1,0 +1,11 @@
+{
+  "name": "Події поруч",
+  "short_name": "Події",
+  "description": "Події та активність навколо тебе",
+  "lang": "uk",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#ffd63d",
+  "icons": []
+}
