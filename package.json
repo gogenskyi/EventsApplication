@@ -3,20 +3,19 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": {
-    "dev": "node --watch server.js",
-    "start": "node server.js"
-  },
+  "scripts": {"dev":"node --watch server.js","start":"node server.js"},
   "dependencies": {
-    "bcryptjs": "^3.0.2",
-    "cookie-parser": "^1.4.7",
-    "dotenv": "^17.2.2",
-    "express": "^5.1.0",
-    "google-auth-library": "^10.3.0",
-    "jsonwebtoken": "^9.0.2",
-    "multer": "^2.0.2",
-    "pg": "^8.16.3",
-    "socket.io": "^4.8.1",
-    "web-push": "^3.6.7"
+    "@netlify/functions":"^4.2.4",
+    "bcryptjs":"^3.0.2",
+    "cookie-parser":"^1.4.7",
+    "dotenv":"^17.2.2",
+    "express":"^5.1.0",
+    "google-auth-library":"^10.3.0",
+    "jsonwebtoken":"^9.0.2",
+    "multer":"^2.0.2",
+    "pg":"^8.16.3",
+    "serverless-http":"^3.2.0",
+    "socket.io":"^4.8.1",
+    "web-push":"^3.6.7"
   }
 }
