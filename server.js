@@ -23,18 +23,21 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 const uploadDir = path.join(process.cwd(), 'uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
-const upload = multer({ dest: uploadDir, limits: { fileSize: 100 * 1024 * 1024 }, fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp|gif)$|^video\/(mp4|webm|quicktime)$/.test(file.mimetype)) });
+const upload = multer({ dest: uploadDir, limits: { fileSize: process.env.NETLIFY ? 5 * 1024 * 1024 : 100 * 1024 * 1024 }, fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp|gif)$|^video\/(mp4|webm|quicktime)$/.test(file.mimetype)) });
 const avatarUpload = multer({ dest: uploadDir, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp)$/.test(file.mimetype)) });
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
 
-app.use(express.json({ limit: '2mb' })); app.use(cookieParser()); app.use('/uploads', express.static(uploadDir)); app.use(express.static(process.cwd()));
+app.use(express.json({ limit: '2mb' }));
+app.use(cookieParser());
+app.use('/uploads', express.static(uploadDir));
+app.use(express.static(process.cwd()));
 function sign(user) { return jwt.sign({ sub: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET, { expiresIn: '7d' }); }
 function setSession(res, user) { res.cookie('access_token', sign(user), { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', maxAge: 7 * 86400000 }); }
 function auth(req,res,next){const token=req.cookies.access_token||(req.headers.authorization||'').replace(/^Bearer\s+/i,'');if(!token)return res.status(401).json({error:'AUTH_REQUIRED'});try{req.user=jwt.verify(token,JWT_SECRET);next()}catch{res.status(401).json({error:'INVALID_SESSION'})}}
 function requireModerator(req,res,next){if(!['moderator','admin'].includes(req.user.role))return res.status(403).json({error:'MODERATOR_REQUIRED'});next()}
 function publicUser(row){return{id:row.id,email:row.email,name:row.name,avatar_url:row.avatar_url,role:row.role||'user',verified:!!row.verified}}
 async function notifyNearby(event){try{const {rows}=await pool.query(`SELECT p.user_id,p.subscription FROM push_subscriptions p WHERE p.latitude IS NOT NULL AND p.longitude IS NOT NULL AND (6371*acos(least(1,cos(radians($1))*cos(radians(p.latitude))*cos(radians(p.longitude)-radians($2))+sin(radians($1))*sin(radians(p.latitude)))))<=30`,[event.latitude,event.longitude]);for(const r of rows){await pool.query('INSERT INTO notifications(user_id,type,title,body,event_id) VALUES($1,$2,$3,$4,$5)',[r.user_id,'nearby_event','Нова подія поруч',event.title,event.id]);if(process.env.VAPID_PUBLIC_KEY&&process.env.VAPID_PRIVATE_KEY)webpush.sendNotification(r.subscription,JSON.stringify({title:'Нова подія поруч',body:event.title,url:`/?event=${event.id}`})).catch(()=>{});}}catch(e){console.error('notifyNearby',e.message)}}
-app.get('/api/health',(_req,res)=>res.json({ok:true}));
+app.get('/api/health',(_req,res)=>res.json({ok:true,netlify:!!process.env.NETLIFY}));
 app.get('/api/config',(_req,res)=>res.json({googleClientId:process.env.GOOGLE_CLIENT_ID||'',vapidPublicKey:process.env.VAPID_PUBLIC_KEY||''}));
 app.post('/api/auth/register',async(req,res)=>{try{const{email,password,name}=req.body;if(!email||!password||!name||password.length<8)return res.status(400).json({error:'Email, name and password (8+ chars) are required'});const hash=await bcrypt.hash(password,12);const{rows}=await pool.query('INSERT INTO users(email,password_hash,name) VALUES($1,$2,$3) RETURNING id,email,name,avatar_url,role,verified',[email.trim().toLowerCase(),hash,name.trim()]);setSession(res,rows[0]);res.status(201).json({user:publicUser(rows[0])})}catch(e){res.status(e.code==='23505'?409:500).json({error:e.code==='23505'?'EMAIL_EXISTS':'SERVER_ERROR'})}});
 app.post('/api/auth/login',async(req,res)=>{try{const{email,password}=req.body;const{rows}=await pool.query('SELECT * FROM users WHERE email=$1',[email?.trim().toLowerCase()]);if(!rows[0]||!rows[0].password_hash||!(await bcrypt.compare(password||'',rows[0].password_hash)))return res.status(401).json({error:'INVALID_CREDENTIALS'});setSession(res,rows[0]);res.json({user:publicUser(rows[0])})}catch{res.status(500).json({error:'SERVER_ERROR'})}});
@@ -55,4 +58,5 @@ app.post('/api/admin/events/:id/review',auth,requireModerator,async(req,res)=>{c
 app.post('/api/admin/users/:id/verify',auth,requireModerator,async(req,res)=>{const{rows}=await pool.query('UPDATE users SET verified=$1 WHERE id=$2 RETURNING id,email,name,avatar_url,role,verified',[!!req.body.verified,req.params.id]);res.json({user:publicUser(rows[0])})});
 io.on('connection',socket=>socket.emit('connected',{ok:true}));
 app.get('/{*splat}',(_req,res)=>res.sendFile(path.join(process.cwd(),'index.html')));
-server.listen(PORT,()=>console.log(`EventsApplication running on :${PORT}`));
+export { app, server };
+if (!process.env.NETLIFY) server.listen(PORT,()=>console.log(`EventsApplication running on :${PORT}`));
