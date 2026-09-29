@@ -35,6 +35,28 @@
 
 Для MVP медіа зберігаються в `uploads/`. Для production рекомендовано S3-compatible storage (AWS S3 / Cloudflare R2 / GCS) + CDN.
 
+## Netlify
+
+Проєкт підготовлений для Netlify через `netlify.toml`: статичний web/PWA клієнт публікується з кореня, а Express API підключений як Netlify Function `/api/*`. Netlify офіційно підтримує Express через Functions. urlNetlify: Express deployment guidehttps://docs.netlify.com/build/frameworks/framework-setup-guides/express/
+
+У Netlify Project `post-events` потрібно підключити GitHub repository `gogenskyi/EventsApplication` і гілку `feature/events-platform` для preview/тесту. Після перевірки гілку можна зробити production branch.
+
+Environment variables для API:
+
+```text
+DATABASE_URL
+JWT_SECRET
+GOOGLE_CLIENT_ID
+VAPID_PUBLIC_KEY
+VAPID_PRIVATE_KEY
+VAPID_SUBJECT
+NODE_ENV=production
+```
+
+Netlify Functions мають обмеження на buffered request/response payload, тому production-відео не варто прокачувати через Express Function. Для медіа потрібен S3/R2/Cloudinary-style object storage і пряме завантаження з браузера; база повинна зберігати URL медіа. Це також прибирає медіа з serverless filesystem.
+
+Socket.IO також не слід використовувати як єдиний realtime transport у serverless production. Для production realtime рекомендується managed WebSocket/realtime provider або окремий довгоживучий backend. Поточний Socket.IO залишається для локального/звичайного Node deployment.
+
 ## Запуск локально
 
 1. Node.js 20+ та PostgreSQL 15+.
@@ -72,18 +94,20 @@ Web Push працює тільки в secure context (HTTPS; localhost є вин
 ## Структура
 
 ```text
-index.html          web/PWA interface
-style.css           responsive UI
-script.js            map, feed, auth, events
-notifications.js     PWA + push client
-server.js            Express API + Socket.IO + Web Push
-schema.sql           PostgreSQL schema
-admin.html           moderation dashboard
-manifest.webmanifest PWA metadata
-sw.js                service worker
-favicon.svg          app icon
-config.js            public client configuration
-.env.example         server configuration template
+index.html                 web/PWA interface
+style.css                  responsive UI
+script.js                  map, feed, auth, events
+notifications.js            PWA + push client
+server.js                   Express API + Socket.IO + Web Push
+netlify/functions/api.js    Netlify serverless API adapter
+netlify.toml                Netlify build + routing config
+schema.sql                  PostgreSQL schema
+admin.html                  moderation dashboard
+manifest.webmanifest       PWA metadata
+sw.js                      service worker
+favicon.svg                app icon
+config.js                  public client configuration
+.env.example               server configuration template
 ```
 
 ## Production roadmap
