@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 ALTER TABLE events ADD COLUMN IF NOT EXISTS trust_status TEXT NOT NULL DEFAULT 'new';
-
 CREATE INDEX IF NOT EXISTS events_location_idx ON events(latitude, longitude);
 CREATE INDEX IF NOT EXISTS events_category_idx ON events(category);
 CREATE INDEX IF NOT EXISTS events_created_idx ON events(created_at DESC);
@@ -40,6 +39,13 @@ CREATE TABLE IF NOT EXISTS event_attendance (
   event_id UUID REFERENCES events(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   status TEXT NOT NULL CHECK (status IN ('going','declined')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY(event_id,user_id)
+);
+
+CREATE TABLE IF NOT EXISTS saved_events (
+  event_id UUID REFERENCES events(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY(event_id,user_id)
 );
