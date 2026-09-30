@@ -1,0 +1,9 @@
+{
+  "name": "events-application",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Events map: users post photos/videos from live events pinned on a map",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=22.13" }
+}

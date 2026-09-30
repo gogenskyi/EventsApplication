@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Events — що відбувається поруч</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Events</h1>
+  <input id="q" type="search" placeholder="Знайти подію або місце" aria-label="Пошук">
+  <button id="loc" type="button">Моя локація</button>
+  <button id="add" type="button" class="primary">Додати подію</button>
+</header>
+
+<div id="chips" role="group" aria-label="Категорії">
+  <button class="on" data-c="all">Усі</button>
+  <button data-c="concert">🎵 Концерти</button>
+  <button data-c="street">🏙 Вуличні</button>
+  <button data-c="trash">🔥 Треш</button>
+  <button data-c="sport">⚽ Спорт</button>
+  <button data-c="other">✨ Інше</button>
+</div>
+
+<main>
+  <div id="map"></div>
+  <aside>
+    <div class="bar"><b id="count"></b><label><input type="checkbox" id="near" disabled> Тільки в радіусі 3 км</label></div>
+    <div id="list"></div>
+  </aside>
+</main>
+
+<dialog id="event"><button class="x" aria-label="Закрити">×</button><div id="ev"></div></dialog>
+
+<dialog id="create">
+  <button class="x" aria-label="Закрити">×</button>
+  <h2>Додати подію</h2>
+  <label>Що відбувається?<textarea id="desc" rows="3" maxlength="1000" placeholder="Коротко опишіть подію"></textarea></label>
+  <label>Категорія
+    <select id="cat">
+      <option value="concert">🎵 Концерт</option>
+      <option value="street">🏙 Вулична подія</option>
+      <option value="trash">🔥 Треш</option>
+      <option value="sport">⚽ Спорт</option>
+      <option value="other">✨ Інше</option>
+    </select>
+  </label>
+  <label>Фото або відео (до 50 МБ)<input id="file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime"></label>
+  <label>Назва місця<input id="place" maxlength="120" placeholder="Наприклад, Площа Ринок"></label>
+  <div class="row">
+    <button id="here" type="button">Моя локація</button>
+    <button id="pick" type="button">Вказати на мапі</button>
+  </div>
+  <p id="coords" class="hint"></p>
+  <button id="publish" class="primary" type="button">Опублікувати</button>
+</dialog>
+
+<div id="toast" role="status"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
