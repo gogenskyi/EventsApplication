@@ -4,3 +4,35 @@ async function loadNotifications(){try{const d=await notificationApi('/api/notif
 function urlBase64ToUint8Array(value){const base64=(value+'='.repeat((4-value.length%4)%4)).replace(/-/g,'+').replace(/_/g,'/');return Uint8Array.from(atob(base64),c=>c.charCodeAt(0))}
 async function enablePush(){try{if(!('Notification'in window)||!('serviceWorker'in navigator)||!('PushManager'in window))return alert('Push не підтримується цим браузером.');const permission=await Notification.requestPermission();if(permission!=='granted')return alert('Дозвіл на сповіщення не надано.');const cfg=await notificationApi('/api/config');if(!cfg.vapidPublicKey)return alert('На сервері ще не налаштовано VAPID_PUBLIC_KEY.');const reg=await navigator.serviceWorker.ready;const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(cfg.vapidPublicKey)});let latitude=null,longitude=null;if(navigator.geolocation){await new Promise(resolve=>navigator.geolocation.getCurrentPosition(p=>{latitude=p.coords.latitude;longitude=p.coords.longitude;resolve()},()=>resolve(),{enableHighAccuracy:false,timeout:5000}))}await notificationApi('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...sub.toJSON(),latitude,longitude})});alert('Push-сповіщення увімкнено ✓')}catch(e){console.error(e);alert('Не вдалося увімкнути push-сповіщення.')}}
 registerPWA();window.addEventListener('load',()=>{const bell=document.querySelector('#bell');if(bell)bell.onclick=async()=>{const n=document.querySelector('#notifications');if(n){n.showModal();loadNotifications()}};const push=document.querySelector('#enablePush');if(push)push.onclick=enablePush});
+
+let pendingInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  pendingInstallPrompt = event;
+});
+window.addEventListener('appinstalled', () => {
+  pendingInstallPrompt = null;
+  const button = document.querySelector('#installApp');
+  if (button) button.textContent = '✓ Встановлено';
+});
+window.addEventListener('load', () => {
+  const button = document.querySelector('#installApp');
+  if (!button) return;
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  if (standalone) {
+    button.textContent = '✓ Встановлено';
+    return;
+  }
+  button.addEventListener('click', async () => {
+    if (pendingInstallPrompt) {
+      pendingInstallPrompt.prompt();
+      await pendingInstallPrompt.userChoice;
+      pendingInstallPrompt = null;
+      return;
+    }
+    const isAppleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    alert(isAppleMobile
+      ? 'У Safari натисни «Поділитися», потім «На початковий екран».'
+      : 'Відкрий меню браузера та вибери «Встановити застосунок» або «Додати на головний екран».');
+  });
+});

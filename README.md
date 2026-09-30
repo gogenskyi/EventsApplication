@@ -27,5 +27,7 @@ The repository includes `netlify.toml` and `netlify/functions/api.js`. Configure
 
 Netlify Functions do not keep a Socket.IO connection alive, so the frontend refreshes the event feed every 30 seconds on Netlify. The standalone Node server uses Socket.IO for live updates.
 
+The site is an installable PWA for phones. On Android, use the “На телефон” button or the browser menu. On iPhone/iPad, open the site in Safari and choose Share → Add to Home Screen. This installs the web app; publishing to Google Play or the App Store requires separate store accounts and packaging.
+
 ## CI
 GitHub Actions uses `npm ci` and checks the server, browser scripts, Netlify function, database migration script, and required static files.
