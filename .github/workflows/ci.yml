@@ -19,10 +19,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: node --check server.js
-      - run: node --check script.js
-      - run: node --check notifications.js
-      - run: node --check profile-enhancements.js
-      - run: node --check netlify/functions/api.js
+      - run: npm run check
       - name: Check required production files
         run: test -f index.html && test -f style.css && test -f manifest.webmanifest && test -f sw.js && test -f netlify.toml

@@ -20,8 +20,12 @@ npm run dev
 
 Set the required values from `.env.example` before starting the backend. Never commit real credentials, database URLs, JWT secrets, Google credentials, or VAPID private keys.
 
+Create the PostgreSQL schema with `npm run db:migrate` after setting `DATABASE_URL`. The migration is safe to re-run.
+
 ## Netlify
-The repository includes `netlify.toml` and `netlify/functions/api.js`. Configure the production environment variables in Netlify before deploying. Persistent media should use object storage in production rather than the ephemeral function filesystem.
+The repository includes `netlify.toml` and `netlify/functions/api.js`. Configure `DATABASE_URL` and a random `JWT_SECRET` of at least 32 characters in Netlify, then run `npm run db:migrate` against that database before publishing. `GOOGLE_CLIENT_ID` and the VAPID key pair are optional. Events can be created without media; image/video uploads deliberately return `MEDIA_STORAGE_NOT_CONFIGURED` on Netlify until persistent object storage is implemented and configured. The local development server stores uploads in `uploads/`.
+
+Netlify Functions do not keep a Socket.IO connection alive, so the frontend refreshes the event feed every 30 seconds on Netlify. The standalone Node server uses Socket.IO for live updates.
 
 ## CI
-GitHub Actions performs syntax checks for the server, browser scripts, and Netlify function. The workflow intentionally uses `npm install` without npm cache until a lockfile is committed.
+GitHub Actions uses `npm ci` and checks the server, browser scripts, Netlify function, database migration script, and required static files.
