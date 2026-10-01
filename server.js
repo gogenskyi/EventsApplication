@@ -1,173 +1,84 @@
-// Zero-dependency backend: Node >= 22.13 (built-in http + node:sqlite).
-import http from "node:http";
-import fs from "node:fs";
-import path from "node:path";
-import crypto from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
+import 'dotenv/config';
+import express from 'express';
+import http from 'http';
+import path from 'path';
+import os from 'node:os';
+import fs from 'fs';
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import cookieParser from 'cookie-parser';
+import multer from 'multer';
+import pg from 'pg';
+import { OAuth2Client } from 'google-auth-library';
+import { Server } from 'socket.io';
+import webpush from 'web-push';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT) || 3000;
-const DATA = process.env.DATA_DIR || path.join(here, "data");
-const UPLOADS = path.join(DATA, "uploads");
-const PUBLIC = path.join(here, "public");
-fs.mkdirSync(UPLOADS, { recursive: true });
+const { Pool } = pg;
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+const pool = new Pool({ connectionString: process.env.DATABASE_URL || process.env.NETLIFY_DB_URL, max: process.env.NETLIFY ? 1 : 10, idleTimeoutMillis: 30000 });
+const google = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const PORT = process.env.PORT || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (isProduction && (!JWT_SECRET || JWT_SECRET.length < 32)) throw new Error('JWT_SECRET must be set to a strong 32+ character value in production');
+// Netlify's function bundle is read-only. Multer may stage multipart uploads in
+// /tmp, but media is rejected later unless persistent object storage is wired.
+const uploadDir = process.env.NETLIFY ? path.join(os.tmpdir(), 'events-uploads') : path.join(process.cwd(), 'uploads');
+fs.mkdirSync(uploadDir, { recursive: true });
+const upload = multer({ dest: uploadDir, limits: { fileSize: process.env.NETLIFY ? 5 * 1024 * 1024 : 100 * 1024 * 1024 }, fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp|gif)$|^video\/(mp4|webm|quicktime)$/.test(file.mimetype) ? null : new Error('UNSUPPORTED_MEDIA')) });
+const avatarUpload = multer({ dest: uploadDir, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp)$/.test(file.mimetype) ? null : new Error('UNSUPPORTED_AVATAR')) });
+if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
 
-const MAX_FILE = 50 * 1024 * 1024;
-const MEDIA = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
-  "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov" };
-const EXT_TYPE = Object.fromEntries(Object.entries(MEDIA).map(([t, e]) => [e, t]));
-const STATIC = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-  ".ico": "image/x-icon", ".svg": "image/svg+xml", ".png": "image/png" };
-const CATS = new Set(["concert", "street", "trash", "sport", "other"]);
-
-// ---- database
-const db = new DatabaseSync(path.join(DATA, "events.db"));
-db.exec(`
-  CREATE TABLE IF NOT EXISTS events(
-    id TEXT PRIMARY KEY, title TEXT NOT NULL, descr TEXT NOT NULL, cat TEXT NOT NULL, place TEXT NOT NULL,
-    lat REAL NOT NULL, lng REAL NOT NULL, ts INTEGER NOT NULL, author TEXT NOT NULL, media TEXT, mtype TEXT);
-  CREATE TABLE IF NOT EXISTS going(event_id TEXT NOT NULL, client TEXT NOT NULL, PRIMARY KEY(event_id, client));
-  CREATE INDEX IF NOT EXISTS events_ts ON events(ts DESC);
-`);
-if (db.prepare("SELECT COUNT(*) c FROM events").get().c === 0 && process.env.SEED !== "0") {
-  const ins = db.prepare("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL)");
-  const t = Date.now();
-  [["Живий концерт у !FESTrepublic", "Львівські гурти грають просто зараз.", "concert", "вул. Старознесенська, 24–26", 49.8447, 24.036, 36e5],
-   ["Вуличний арт-фестиваль", "Мурали, музика та відкриті майстер-класи.", "street", "Площа Ринок", 49.8419, 24.0315, 72e5],
-   ["Аматорський футбольний матч", "Матч локальної команди. Вхід вільний.", "sport", "Стрийський парк", 49.8235, 24.0185, 18e5],
-   ["Нічний вуличний баттл", "Спонтанний баттл, збирається натовп.", "trash", "просп. Свободи", 49.8412, 24.027, 9e5]]
-    .forEach(([a, b, c, d, lat, lng, ago]) => ins.run(crypto.randomUUID(), a, b, c, d, lat, lng, t - ago, "seed"));
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser());
+const buckets = new Map();
+function rateLimit({ windowMs = 60000, max = 60 } = {}) { return (req, res, next) => { const key = `${req.ip}:${req.path}`; const now = Date.now(); let b = buckets.get(key); if (!b || now - b.start >= windowMs) b = { start: now, count: 0 }; b.count++; buckets.set(key, b); if (b.count > max) return res.status(429).json({ error: 'RATE_LIMITED' }); next(); }; }
+app.use('/api/', rateLimit({ max: 120 }));
+app.use('/api/auth/', rateLimit({ max: 20 }));
+app.use('/api/events', rateLimit({ max: 60 }));
+if (!process.env.NETLIFY) {
+  app.use('/uploads', express.static(uploadDir, { maxAge: '7d', immutable: true }));
+  app.use(express.static(process.cwd(), { maxAge: isProduction ? '1h' : 0, dotfiles: 'deny' }));
 }
-const q = {
-  list: db.prepare(`SELECT e.*, (SELECT COUNT(*) FROM going g WHERE g.event_id=e.id) n,
-      EXISTS(SELECT 1 FROM going g WHERE g.event_id=e.id AND g.client=?) going
-      FROM events e ORDER BY ts DESC LIMIT 500`),
-  one: db.prepare(`SELECT e.*, (SELECT COUNT(*) FROM going g WHERE g.event_id=e.id) n,
-      EXISTS(SELECT 1 FROM going g WHERE g.event_id=e.id AND g.client=?) going FROM events e WHERE id=?`),
-  insert: db.prepare("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL)"),
-  setMedia: db.prepare("UPDATE events SET media=?, mtype=? WHERE id=?"),
-  raw: db.prepare("SELECT * FROM events WHERE id=?"),
-  del: db.prepare("DELETE FROM events WHERE id=?"),
-  delGoing: db.prepare("DELETE FROM going WHERE event_id=?"),
-  goOn: db.prepare("INSERT OR IGNORE INTO going VALUES(?,?)"),
-  goOff: db.prepare("DELETE FROM going WHERE event_id=? AND client=?")
-};
-const view = (r, client) => ({ id: r.id, t: r.title, d: r.descr, c: r.cat, l: r.place, lat: r.lat, lng: r.lng, ts: r.ts,
-  n: r.n, going: !!r.going, mine: r.author === client,
-  url: r.media ? "/uploads/" + r.media : null, type: r.mtype || "" });
-
-// ---- helpers
-const json = (res, code, body) => { const s = JSON.stringify(body);
-  res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Content-Length": Buffer.byteLength(s), "Cache-Control": "no-store" });
-  res.end(s); };
-const fail = (code, msg) => Object.assign(new Error(msg), { code });
-function readBody(req, limit) {
-  return new Promise((resolve, reject) => {
-    if (Number(req.headers["content-length"]) > limit) return reject(fail(413, "Файл завеликий"));
-    const chunks = []; let size = 0;
-    req.on("data", c => { size += c.length; if (size > limit) { reject(fail(413, "Файл завеликий")); req.destroy(); } else chunks.push(c); });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-}
-const hits = new Map(); // naive per-IP write limiter: 40 writes / minute
-function limited(ip) { const now = Date.now(), h = (hits.get(ip) || []).filter(t => now - t < 6e4); h.push(now); hits.set(ip, h); return h.length > 40; }
-setInterval(() => { const now = Date.now(); for (const [k, v] of hits) if (v.every(t => now - t > 6e4)) hits.delete(k); }, 6e4).unref();
-const hav = (a, b, c, d) => { const r = Math.PI / 180, x = Math.sin((c - a) * r / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2; return 12742000 * Math.asin(Math.sqrt(x)); };
-const clean = (v, max) => typeof v === "string" ? v.trim().slice(0, max) : "";
-
-// a file can vanish between stat() and read (e.g. event deleted): never let that crash the server
-function stream(rs, res) { rs.on("error", () => res.destroy()); res.on("close", () => rs.destroy()); rs.pipe(res); }
-
-function sendFile(req, res, file, type, cache) {
-  fs.stat(file, (err, st) => {
-    if (err || !st.isFile()) return json(res, 404, { error: "Не знайдено" });
-    const h = { "Content-Type": type, "X-Content-Type-Options": "nosniff", "Accept-Ranges": "bytes", "Cache-Control": cache };
-    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
-    if (m) { // range support so videos can seek (required by Safari)
-      const s = m[1] === "" ? st.size - Number(m[2]) : Number(m[1]);
-      const e = m[1] === "" || m[2] === "" ? st.size - 1 : Math.min(Number(m[2]), st.size - 1);
-      if (!(s >= 0 && s <= e)) { res.writeHead(416, { "Content-Range": `bytes */${st.size}` }); return res.end(); }
-      res.writeHead(206, { ...h, "Content-Range": `bytes ${s}-${e}/${st.size}`, "Content-Length": e - s + 1 });
-      return stream(fs.createReadStream(file, { start: s, end: e }), res);
-    }
-    res.writeHead(200, { ...h, "Content-Length": st.size });
-    stream(fs.createReadStream(file), res);
-  });
-}
-
-// ---- api
-async function api(req, res, url) {
-  const client = req.headers["x-client-id"] || "";
-  if (!/^[0-9a-f-]{36}$/.test(client)) throw fail(400, "Потрібен X-Client-Id");
-  const parts = url.pathname.split("/").filter(Boolean); // ["api","events",id?,action?]
-  if (parts[1] !== "events") throw fail(404, "Не знайдено");
-  const id = parts[2], action = parts[3];
-  const write = req.method !== "GET";
-  if (write && limited(req.socket.remoteAddress)) throw fail(429, "Забагато запитів, зачекайте хвилину");
-
-  if (!id && req.method === "GET") {
-    let rows = q.list.all(client);
-    const lat = parseFloat(url.searchParams.get("lat")), lng = parseFloat(url.searchParams.get("lng")), rad = parseFloat(url.searchParams.get("radius"));
-    if ([lat, lng, rad].every(Number.isFinite)) rows = rows.filter(r => hav(lat, lng, r.lat, r.lng) <= rad);
-    return json(res, 200, rows.map(r => view(r, client)));
-  }
-  if (!id && req.method === "POST") {
-    let b; try { b = JSON.parse((await readBody(req, 20_000)).toString() || "{}"); } catch (e) { if (e.code) throw e; throw fail(400, "Некоректний JSON"); }
-    const descr = clean(b.d, 1000), title = clean(b.t, 80) || descr.split("\n")[0].slice(0, 80) || "Нова подія";
-    if (!CATS.has(b.c)) throw fail(400, "Невідома категорія");
-    if (!(Math.abs(b.lat) <= 90 && Math.abs(b.lng) <= 180) || typeof b.lat !== "number" || typeof b.lng !== "number") throw fail(400, "Некоректні координати");
-    const nid = crypto.randomUUID();
-    q.insert.run(nid, title, descr, b.c, clean(b.l, 120), b.lat, b.lng, Date.now(), client);
-    return json(res, 201, view(q.one.get(client, nid), client));
-  }
-  const row = id && q.raw.get(id);
-  if (!row) throw fail(404, "Подію не знайдено");
-
-  if (action === "media" && req.method === "PUT") {
-    if (row.author !== client) throw fail(403, "Це не ваша подія");
-    const type = (req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
-    if (!MEDIA[type]) throw fail(415, "Підтримуються JPEG, PNG, WebP, GIF, MP4, WebM, MOV");
-    const body = await readBody(req, MAX_FILE);
-    if (!body.length) throw fail(400, "Порожній файл");
-    const name = row.id + MEDIA[type];
-    if (row.media && row.media !== name) fs.rmSync(path.join(UPLOADS, row.media), { force: true });
-    fs.writeFileSync(path.join(UPLOADS, name), body);
-    q.setMedia.run(name, type, id);
-    return json(res, 200, view(q.one.get(client, id), client));
-  }
-  if (action === "going" && req.method === "POST") {
-    let b; try { b = JSON.parse((await readBody(req, 1000)).toString() || "{}"); } catch { throw fail(400, "Некоректний JSON"); }
-    (b.going ? q.goOn : q.goOff).run(id, client);
-    return json(res, 200, view(q.one.get(client, id), client));
-  }
-  if (!action && req.method === "DELETE") {
-    if (row.author !== client) throw fail(403, "Це не ваша подія");
-    if (row.media) fs.rmSync(path.join(UPLOADS, row.media), { force: true });
-    q.delGoing.run(id); q.del.run(id);
-    res.writeHead(204); return res.end();
-  }
-  throw fail(405, "Метод не підтримується");
-}
-
-// ---- server
-http.createServer(async (req, res) => {
+function sign(user) { return jwt.sign({ sub: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET || 'development-only-secret', { expiresIn: '7d' }); }
+function setSession(res, user) { res.cookie('access_token', sign(user), { httpOnly: true, secure: isProduction, sameSite: 'lax', path: '/', maxAge: 7 * 86400000 }); }
+function auth(req, res, next) { const token = req.cookies.access_token || (req.headers.authorization || '').replace(/^Bearer\s+/i, ''); if (!token) return res.status(401).json({ error: 'AUTH_REQUIRED' }); try { req.user = jwt.verify(token, JWT_SECRET || 'development-only-secret'); next(); } catch { res.status(401).json({ error: 'INVALID_SESSION' }); } }
+function requireModerator(req, res, next) { if (!['moderator', 'admin'].includes(req.user.role)) return res.status(403).json({ error: 'MODERATOR_REQUIRED' }); next(); }
+function publicUser(row) { return { id: row.id, email: row.email, name: row.name, avatar_url: row.avatar_url, role: row.role || 'user', verified: !!row.verified }; }
+async function notifyNearby(event) { try { const { rows } = await pool.query(`SELECT p.user_id,p.subscription FROM push_subscriptions p WHERE p.latitude IS NOT NULL AND p.longitude IS NOT NULL AND (6371*acos(least(1,cos(radians($1))*cos(radians(p.latitude))*cos(radians(p.longitude)-radians($2))+sin(radians($1))*sin(radians(p.latitude)))))<=30`, [event.latitude, event.longitude]); for (const r of rows) { await pool.query('INSERT INTO notifications(user_id,type,title,body,event_id) VALUES($1,$2,$3,$4,$5)', [r.user_id, 'nearby_event', 'Нова подія поруч', event.title, event.id]); if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) webpush.sendNotification(r.subscription, JSON.stringify({ title: 'Нова подія поруч', body: event.title, url: `/?event=${event.id}` })).catch(() => {}); } } catch (e) { console.error('notifyNearby', e.message); } }
+app.get('/api/health', async (_req, res) => {
   try {
-    const url = new URL(req.url, "http://x");
-    if (url.pathname.startsWith("/api/")) return await api(req, res, url);
-    if (req.method !== "GET" && req.method !== "HEAD") throw fail(405, "Метод не підтримується");
-    if (url.pathname.startsWith("/uploads/")) {
-      const name = decodeURIComponent(url.pathname.slice(9));
-      if (!/^[0-9a-f-]{36}\.\w+$/.test(name) || !EXT_TYPE[path.extname(name)]) throw fail(404, "Не знайдено");
-      return sendFile(req, res, path.join(UPLOADS, name), EXT_TYPE[path.extname(name)], "public, max-age=86400");
-    }
-    const rel = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1));
-    const file = path.join(PUBLIC, rel);
-    if (!file.startsWith(PUBLIC + path.sep) || !STATIC[path.extname(file)]) throw fail(404, "Не знайдено");
-    sendFile(req, res, file, STATIC[path.extname(file)], "no-cache");
-  } catch (e) {
-    if (!e.code || e.code >= 500 || typeof e.code !== "number") console.error(e);
-    if (!res.headersSent) json(res, typeof e.code === "number" ? e.code : 500, { error: typeof e.code === "number" ? e.message : "Внутрішня помилка сервера" });
+    await pool.query('SELECT 1');
+    res.json({ ok: true, database: 'connected', netlify: !!process.env.NETLIFY });
+  } catch {
+    res.status(503).json({ ok: false, database: 'unavailable', netlify: !!process.env.NETLIFY });
   }
-}).listen(PORT, () => console.log(`Events app: http://localhost:${PORT}`));
+});
+app.get('/api/config', (_req, res) => res.json({ googleClientId: process.env.GOOGLE_CLIENT_ID || '', vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '', netlify: !!process.env.NETLIFY }));
+app.post('/api/auth/register', async (req, res) => { try { const { email, password, name } = req.body; if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || typeof password !== 'string' || password.length < 8 || password.length > 200 || typeof name !== 'string' || !name.trim() || name.trim().length > 80) return res.status(400).json({ error: 'INVALID_REGISTRATION' }); const hash = await bcrypt.hash(password, 12); const { rows } = await pool.query('INSERT INTO users(email,password_hash,name) VALUES($1,$2,$3) RETURNING id,email,name,avatar_url,role,verified', [email.trim().toLowerCase(), hash, name.trim()]); setSession(res, rows[0]); res.status(201).json({ user: publicUser(rows[0]) }); } catch (e) { res.status(e.code === '23505' ? 409 : 500).json({ error: e.code === '23505' ? 'EMAIL_EXISTS' : 'SERVER_ERROR' }); } });
+app.post('/api/auth/login', async (req, res) => { try { const { email, password } = req.body; const { rows } = await pool.query('SELECT * FROM users WHERE email=$1', [email?.trim().toLowerCase()]); if (!rows[0] || !rows[0].password_hash || !(await bcrypt.compare(password || '', rows[0].password_hash))) return res.status(401).json({ error: 'INVALID_CREDENTIALS' }); setSession(res, rows[0]); res.json({ user: publicUser(rows[0]) }); } catch { res.status(500).json({ error: 'SERVER_ERROR' }); } });
+app.post('/api/auth/google', async (req, res) => { try { if (!process.env.GOOGLE_CLIENT_ID) return res.status(503).json({ error: 'GOOGLE_AUTH_NOT_CONFIGURED' }); const ticket = await google.verifyIdToken({ idToken: req.body.credential, audience: process.env.GOOGLE_CLIENT_ID }); const p = ticket.getPayload(); if (!p?.email || !p.email_verified) return res.status(401).json({ error: 'GOOGLE_EMAIL_NOT_VERIFIED' }); const { rows } = await pool.query(`INSERT INTO users(email,google_id,name,avatar_url) VALUES($1,$2,$3,$4) ON CONFLICT(email) DO UPDATE SET google_id=COALESCE(users.google_id,EXCLUDED.google_id),name=EXCLUDED.name,avatar_url=COALESCE(EXCLUDED.avatar_url,users.avatar_url) RETURNING id,email,name,avatar_url,role,verified`, [p.email.toLowerCase(), p.sub, p.name || p.email.split('@')[0], p.picture || null]); setSession(res, rows[0]); res.json({ user: publicUser(rows[0]) }); } catch { res.status(401).json({ error: 'INVALID_GOOGLE_TOKEN' }); } });
+app.post('/api/auth/logout', (_req, res) => { res.clearCookie('access_token'); res.status(204).end(); });
+app.get('/api/me', auth, async (req, res) => { const { rows } = await pool.query('SELECT id,email,name,avatar_url,role,verified FROM users WHERE id=$1', [req.user.sub]); res.json({ user: rows[0] ? publicUser(rows[0]) : null }); });
+app.patch('/api/me', auth, async (req, res) => { const { name, avatar_url } = req.body; const { rows } = await pool.query('UPDATE users SET name=COALESCE($1,name),avatar_url=COALESCE($2,avatar_url) WHERE id=$3 RETURNING id,email,name,avatar_url,role,verified', [name?.trim() || null, avatar_url || null, req.user.sub]); res.json({ user: publicUser(rows[0]) }); });
+app.post('/api/me/avatar', auth, avatarUpload.single('avatar'), async (req, res) => { try { if (!req.file) return res.status(400).json({ error: 'AVATAR_REQUIRED' }); if (process.env.NETLIFY) { fs.rm(req.file.path, { force: true }, () => {}); return res.status(503).json({ error: 'MEDIA_STORAGE_NOT_CONFIGURED' }); } const ext = path.extname(req.file.originalname).replace(/[^a-z0-9.]/gi, '') || '.jpg'; const name = `avatar-${crypto.randomUUID()}${ext}`; fs.renameSync(req.file.path, path.join(uploadDir, name)); const { rows } = await pool.query('UPDATE users SET avatar_url=$1 WHERE id=$2 RETURNING id,email,name,avatar_url,role,verified', [`/uploads/${name}`, req.user.sub]); res.json({ user: publicUser(rows[0]) }); } catch { res.status(500).json({ error: 'SERVER_ERROR' }); } });
+app.get('/api/events', async (req, res) => { const { q = '', category = 'all', lat, lng, radius = 30 } = req.query; const values = [], where = ["e.trust_status <> 'hidden'"]; if (category !== 'all') { values.push(category); where.push(`e.category=$${values.length}`); } if (q) { values.push(`%${q}%`); where.push(`(e.title ILIKE $${values.length} OR e.description ILIKE $${values.length} OR e.location_name ILIKE $${values.length})`); } let distance = 'NULL'; if (lat && lng) { values.push(Number(lat), Number(lng), Math.min(Number(radius) || 30, 100)); distance = `(6371*acos(least(1,cos(radians($${values.length-2}))*cos(radians(e.latitude))*cos(radians(e.longitude)-radians($${values.length-1}))+sin(radians($${values.length-2}))*sin(radians(e.latitude)))))`; where.push(`${distance} <= $${values.length}`); } const sql = `SELECT e.*,u.name author_name,u.avatar_url author_avatar,u.verified author_verified,COUNT(a.user_id) FILTER (WHERE a.status='going')::int going_count,${distance} distance_km FROM events e JOIN users u ON u.id=e.author_id LEFT JOIN event_attendance a ON a.event_id=e.id WHERE ${where.join(' AND ')} GROUP BY e.id,u.id ORDER BY e.created_at DESC LIMIT 100`; const { rows } = await pool.query(sql, values); res.json({ events: rows }); });
+app.post('/api/events', auth, upload.single('media'), async (req, res) => { try { const { title, description, category, latitude, longitude, location_name } = req.body; const lat = Number(latitude), lng = Number(longitude); if (typeof title !== 'string' || !title.trim() || typeof description !== 'string' || !description.trim() || !['concert','street','sport','other'].includes(category) || !Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) return res.status(400).json({ error: 'INVALID_EVENT' }); if (req.file && process.env.NETLIFY) { fs.rm(req.file.path, { force: true }, () => {}); return res.status(503).json({ error: 'MEDIA_STORAGE_NOT_CONFIGURED' }); } let mediaUrl = null, mediaType = null; if (req.file) { const ext = path.extname(req.file.originalname).replace(/[^a-z0-9.]/gi, ''); const finalName = `${crypto.randomUUID()}${ext}`; fs.renameSync(req.file.path, path.join(uploadDir, finalName)); mediaUrl = `/uploads/${finalName}`; mediaType = req.file.mimetype.startsWith('video/') ? 'video' : 'image'; } const { rows } = await pool.query(`INSERT INTO events(author_id,title,description,category,latitude,longitude,location_name,media_url,media_type) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [req.user.sub, title.trim().slice(0, 140), description.trim().slice(0, 1000), category, lat, lng, typeof location_name === 'string' ? location_name.trim().slice(0, 200) || null : null, mediaUrl, mediaType]); io.emit('event:created', rows[0]); notifyNearby(rows[0]); res.status(201).json({ event: rows[0] }); } catch (e) { if (req.file?.path) fs.rm(req.file.path, { force: true }, () => {}); res.status(e.message === 'UNSUPPORTED_MEDIA' ? 415 : 500).json({ error: e.message === 'UNSUPPORTED_MEDIA' ? 'UNSUPPORTED_MEDIA' : 'SERVER_ERROR' }); } });
+app.post('/api/events/:id/attendance', auth, async (req, res) => { const status = req.body.status === 'declined' ? 'declined' : 'going'; await pool.query(`INSERT INTO event_attendance(event_id,user_id,status) VALUES($1,$2,$3) ON CONFLICT(event_id,user_id) DO UPDATE SET status=EXCLUDED.status`, [req.params.id, req.user.sub, status]); const { rows } = await pool.query(`SELECT COUNT(*) FILTER (WHERE status='going')::int going FROM event_attendance WHERE event_id=$1`, [req.params.id]); io.emit('event:attendance', { id: req.params.id, going: rows[0].going }); res.json(rows[0]); });
+app.post('/api/events/:id/report', auth, async (req, res) => { const { reason = 'spam' } = req.body; try { await pool.query('INSERT INTO reports(event_id,reporter_id,reason) VALUES($1,$2,$3)', [req.params.id, req.user.sub, String(reason).slice(0, 300)]); await pool.query("UPDATE events SET trust_status='reported' WHERE id=$1 AND trust_status='new'", [req.params.id]); io.emit('event:reported', { id: req.params.id }); res.status(201).json({ ok: true }); } catch (e) { res.status(e.code === '23505' ? 409 : 500).json({ error: e.code === '23505' ? 'ALREADY_REPORTED' : 'SERVER_ERROR' }); } });
+app.post('/api/push/subscribe', auth, async (req, res) => { if (!req.body?.endpoint) return res.status(400).json({ error: 'INVALID_SUBSCRIPTION' }); await pool.query(`INSERT INTO push_subscriptions(user_id,subscription,latitude,longitude,updated_at) VALUES($1,$2,$3,$4,NOW()) ON CONFLICT(user_id) DO UPDATE SET subscription=EXCLUDED.subscription,latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,updated_at=NOW()`, [req.user.sub, req.body, req.body.latitude || null, req.body.longitude || null]); res.status(201).json({ ok: true }); });
+app.get('/api/notifications', auth, async (req, res) => { const { rows } = await pool.query('SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50', [req.user.sub]); res.json({ notifications: rows }); });
+app.post('/api/notifications/:id/read', auth, async (req, res) => { await pool.query('UPDATE notifications SET read_at=NOW() WHERE id=$1 AND user_id=$2', [req.params.id, req.user.sub]); res.json({ ok: true }); });
+app.get('/api/admin/reports', auth, requireModerator, async (_req, res) => { const { rows } = await pool.query(`SELECT r.*,e.title,u.name reporter_name FROM reports r JOIN events e ON e.id=r.event_id JOIN users u ON u.id=r.reporter_id WHERE r.status='open' ORDER BY r.created_at DESC`); res.json({ reports: rows }); });
+app.post('/api/admin/events/:id/review', auth, requireModerator, async (req, res) => { const status = ['verified','hidden','new'].includes(req.body.status) ? req.body.status : 'new'; const { rows } = await pool.query('UPDATE events SET trust_status=$1 WHERE id=$2 RETURNING *', [status, req.params.id]); io.emit('event:reviewed', { id: req.params.id, status }); res.json({ event: rows[0] }); });
+app.post('/api/admin/users/:id/verify', auth, requireModerator, async (req, res) => { const { rows } = await pool.query('UPDATE users SET verified=$1 WHERE id=$2 RETURNING id,email,name,avatar_url,role,verified', [!!req.body.verified, req.params.id]); res.json({ user: publicUser(rows[0]) }); });
+app.use((err, _req, res, _next) => { if (err?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'FILE_TOO_LARGE' }); if (err?.message === 'UNSUPPORTED_MEDIA' || err?.message === 'UNSUPPORTED_AVATAR') return res.status(415).json({ error: err.message }); console.error(err); res.status(500).json({ error: 'SERVER_ERROR' }); });
+io.on('connection', socket => socket.emit('connected', { ok: true }));
+app.get('/{*splat}', (_req, res) => res.sendFile(path.join(process.cwd(), 'index.html')));
+export { app, server };
+if (!process.env.NETLIFY) server.listen(PORT, () => console.log(`EventsApplication running on :${PORT}`));
