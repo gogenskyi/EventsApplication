@@ -1,0 +1,12 @@
+{
+  "name": "Події поруч",
+  "short_name": "Події",
+  "description": "Події та активність навколо тебе",
+  "lang": "uk",
+  "start_url": "/?source=installed-app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#ffd63d",
+  "orientation": "portrait-primary"
+}
