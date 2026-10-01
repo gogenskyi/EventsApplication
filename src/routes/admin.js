@@ -22,7 +22,11 @@ router.get('/reports', async (_req, res) => {
 
 router.post('/events/:id/review', async (req, res) => {
   const status = REVIEW_STATUSES.includes(req.body?.status) ? req.body.status : 'new';
-  const { rows } = await pool.query('UPDATE events SET trust_status=$1 WHERE id=$2 RETURNING *', [status, req.params.id]);
+  const { rows } = await pool.query(
+    'UPDATE events SET trust_status=$1 WHERE id=$2 RETURNING *',
+    [status, req.params.id],
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'EVENT_NOT_FOUND' });
   broadcast('event:reviewed', { id: req.params.id, status });
   res.json({ event: rows[0] });
 });
@@ -32,6 +36,7 @@ router.post('/users/:id/verify', async (req, res) => {
     `UPDATE users SET verified=$1 WHERE id=$2 RETURNING ${USER_COLUMNS}`,
     [!!req.body?.verified, req.params.id],
   );
+  if (!rows[0]) return res.status(404).json({ error: 'USER_NOT_FOUND' });
   res.json({ user: publicUser(rows[0]) });
 });
 
