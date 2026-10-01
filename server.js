@@ -18,7 +18,7 @@ const { Pool } = pg;
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: process.env.NETLIFY ? 1 : 10, idleTimeoutMillis: 30000 });
+const pool = new Pool({ connectionString: process.env.DATABASE_URL || process.env.NETLIFY_DB_URL, max: process.env.NETLIFY ? 1 : 10, idleTimeoutMillis: 30000 });
 const google = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const PORT = process.env.PORT || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
