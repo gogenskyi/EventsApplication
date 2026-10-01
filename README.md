@@ -1,33 +1,22 @@
-# EventsApplication
+# Events
 
-Cross-platform UGC events platform: users publish photo/video reports with geolocation, discover nearby activity on a live map, attend events, receive notifications, and report spam/fake content.
+Users post photos/videos from live events (concerts, street events, trash events) pinned on an interactive map; others see activity around them and can mark "going".
 
-## Current architecture
-- Web/PWA frontend
-- Express API with JWT HttpOnly sessions
-- PostgreSQL persistence
-- Socket.IO realtime updates
-- Google authentication
-- Web Push notifications
-- Netlify Functions adapter for serverless deployment
-- Moderation roles and trust status
+## Run
+Requires Node.js >= 22.13 (no `npm install` needed, zero dependencies).
 
-## Development
-```bash
-npm install
-npm run dev
-```
+    node server.js        # http://localhost:3000
 
-Set the required values from `.env.example` before starting the backend. Never commit real credentials, database URLs, JWT secrets, Google credentials, or VAPID private keys.
+Env vars: `PORT` (default 3000), `DATA_DIR` (default ./data — SQLite db + uploaded media), `SEED=0` to skip demo events.
 
-Create the PostgreSQL schema with `npm run db:migrate` after setting `DATABASE_URL`. The migration is safe to re-run.
+## API (all requests need an `X-Client-Id: <uuid>` header)
+- `GET    /api/events[?lat=&lng=&radius=m]` — list events (optionally within a radius)
+- `POST   /api/events` — JSON `{d, c, l, lat, lng}` (c: concert|street|trash|sport|other)
+- `PUT    /api/events/:id/media` — raw image/video body with its Content-Type (max 50 MB), author only
+- `POST   /api/events/:id/going` — JSON `{going: true|false}`
+- `DELETE /api/events/:id` — author only
+- `GET    /uploads/:file` — media (supports Range for video seeking)
 
-## Netlify
-The repository includes `netlify.toml` and `netlify/functions/api.js`. Configure `DATABASE_URL` and a random `JWT_SECRET` of at least 32 characters in Netlify, then run `npm run db:migrate` against that database before publishing. `GOOGLE_CLIENT_ID` and the VAPID key pair are optional. Events can be created without media; image/video uploads deliberately return `MEDIA_STORAGE_NOT_CONFIGURED` on Netlify until persistent object storage is implemented and configured. The local development server stores uploads in `uploads/`.
-
-Netlify Functions do not keep a Socket.IO connection alive, so the frontend refreshes the event feed every 30 seconds on Netlify. The standalone Node server uses Socket.IO for live updates.
-
-The site is an installable PWA for phones. On Android, use the “На телефон” button or the browser menu. On iPhone/iPad, open the site in Safari and choose Share → Add to Home Screen. This installs the web app; publishing to Google Play or the App Store requires separate store accounts and packaging.
-
-## CI
-GitHub Actions uses `npm ci` and checks the server, browser scripts, Netlify function, database migration script, and required static files.
+## Notes
+- No accounts yet: identity is a random id kept in the browser, so "my posts" is per-browser. Add real login before going public.
+- GitHub Pages can't run this; deploy to a host with Node and a persistent disk (Render, Railway, Fly.io) and point `DATA_DIR` at that disk.

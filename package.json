@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": {"dev":"node --watch server.js","start":"node server.js","db:migrate":"node db/migrate.js","check":"node --check server.js && node --check script.js && node --check notifications.js && node --check profile-enhancements.js && node --check netlify/functions/api.js && node --check db/migrate.js && node --check sw.js && node scripts/check-pwa.js"},
+  "scripts": {"dev":"node --watch server.js","start":"node server.js","db:migrate":"node db/migrate.js","check":"node scripts/check-syntax.js && node scripts/check-pwa.js"},
   "dependencies": {
     "@netlify/functions":"^4.2.4",
     "bcryptjs":"^3.0.2",
