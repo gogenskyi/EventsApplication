@@ -35,4 +35,8 @@ app.use('/api/push', pushRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
 
+app.get('/', (_req, res) => {
+  res.json({ name: 'EventsApplication', status: 'ok' });
+});
+
 app.use(errorHandler);
