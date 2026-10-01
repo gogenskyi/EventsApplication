@@ -1,4 +1,3 @@
-import path from 'node:path';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import { IS_NETLIFY, IS_PRODUCTION, UPLOAD_DIR } from './env.js';
@@ -35,7 +34,5 @@ app.use('/api/events', eventRoutes);
 app.use('/api/push', pushRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
-
-app.get('/{*splat}', (_req, res) => res.sendFile(path.join(process.cwd(), 'index.html')));
 
 app.use(errorHandler);
